@@ -1,0 +1,13 @@
+		{
+			"Sid": "DenyUnEncryptedObjectUploads",
+			"Effect": "Deny",
+			"Principal": "*",
+			"Action": "s3:PutObject",
+			"Resource": "arn:aws:s3:::swbcprod01-infrrd-titan-documents/*",
+			"Condition": {
+				"StringNotEquals": {
+					"s3:x-amz-server-side-encryption": "aws:kms",
+					"s3:x-amz-server-side-encryption-aws-kms-key-id": "arn:aws:kms:us-east-1:379233983907:alias/polaris-swbcprod01-us-east-1/s3"
+				}
+			}
+		}

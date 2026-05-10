@@ -1,0 +1,13 @@
+{
+  "name": "mysql-user-mgmt",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "install:all": "cd server && npm install && cd ../client && npm install",
+    "start": "concurrently \"cd server && node index.js\" \"cd client && npm run dev\"",
+    "dev": "concurrently \"cd server && node --watch index.js\" \"cd client && npm run dev\""
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  }
+}
