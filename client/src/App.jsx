@@ -83,6 +83,33 @@ export default function App() {
   const [exportList, setExportList] = useState([]);
   const [exportSelected, setExportSelected] = useState(new Set());
 
+  // ─── Search user across environments ───
+  const [searchUsername, setSearchUsername] = useState("");
+  const [searching, setSearching] = useState(false);
+  const [searchStatusMsg, setSearchStatusMsg] = useState("");
+  const [searchStatusType, setSearchStatusType] = useState("success"); // success | error | pending
+  const [searchResults, setSearchResults] = useState([]); // one entry per configured connection
+  const [searchSelected, setSearchSelected] = useState(new Set()); // keys of "connectionName|Host"
+  const [crossEnvTargets, setCrossEnvTargets] = useState(null); // [{connectionName, host}] while panel is open
+  const [crossEnvType, setCrossEnvType] = useState("password");
+  const [crossEnvPassword, setCrossEnvPassword] = useState("");
+  const [crossEnvAttrs, setCrossEnvAttrs] = useState({ superPriv: false, createDbPriv: false, createUserPriv: false, accountLocked: false });
+  const [crossEnvAccessType, setCrossEnvAccessType] = useState("readonly");
+  const [crossEnvDbOptions, setCrossEnvDbOptions] = useState([]);
+  const [crossEnvDbLoading, setCrossEnvDbLoading] = useState(false);
+  const [crossEnvDbGroups, setCrossEnvDbGroups] = useState({}); // { [database]: Set<"connectionName|host"> } — which target(s) each selected database applies to
+  const [crossEnvApplying, setCrossEnvApplying] = useState(false);
+  const [crossEnvResults, setCrossEnvResults] = useState([]);
+
+  // ─── Create user across environments ───
+  const [createEnvSelected, setCreateEnvSelected] = useState(new Set()); // connection names
+  const [createEnvForm, setCreateEnvForm] = useState({
+    user: "", host: "%", password: "",
+    superPriv: false, createDbPriv: false, createUserPriv: false, accountLocked: false,
+  });
+  const [createEnvApplying, setCreateEnvApplying] = useState(false);
+  const [createEnvResults, setCreateEnvResults] = useState([]);
+
   // ════════════════════════════════════════
   //  HELPERS
   // ════════════════════════════════════════
@@ -360,6 +387,257 @@ export default function App() {
   };
 
   // ════════════════════════════════════════
+  //  SEARCH USER ACROSS ENVIRONMENTS
+  // ════════════════════════════════════════
+
+  const rowKey = (connectionName, host) => `${connectionName}|${host}`;
+
+  const handleShowSearchUser = () => {
+    setView("search-user");
+    setMsg("");
+    setSearchUsername("");
+    setSearchStatusMsg("");
+    setSearchResults([]);
+    setSearchSelected(new Set());
+    setCrossEnvTargets(null);
+  };
+
+  const fetchSearchResults = async (username) => {
+    const data = await api.searchUserAcrossEnvs(username);
+    const results = data.results || [];
+    setSearchResults(results);
+    const foundCount = results.reduce((n, r) => n + (r.matches?.length || 0), 0);
+    setSearchStatusType(foundCount === 0 ? "error" : "success");
+    setSearchStatusMsg(
+      foundCount === 0
+        ? `No user "${username}" found in any environment.`
+        : `Found "${username}" in ${foundCount} location(s) across ${results.length} environment(s).`
+    );
+  };
+
+  const runSearchUser = async () => {
+    const username = searchUsername.trim();
+    if (!username) {
+      setSearchStatusType("error");
+      setSearchStatusMsg("Please enter a username");
+      return;
+    }
+    setSearching(true);
+    setSearchStatusType("pending");
+    setSearchStatusMsg("Searching across all configured environments...");
+    setSearchSelected(new Set());
+    setCrossEnvTargets(null);
+    try {
+      await fetchSearchResults(username);
+    } catch (err) {
+      setSearchStatusType("error");
+      setSearchStatusMsg(err.message);
+    }
+    setSearching(false);
+  };
+
+  const toggleSearchRow = (connectionName, host) => {
+    setSearchSelected((prev) => {
+      const next = new Set(prev);
+      const key = rowKey(connectionName, host);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const allSearchRowKeys = () =>
+    searchResults.flatMap((r) => (r.matches || []).map((m) => rowKey(r.connectionName, m.Host)));
+
+  const toggleSearchSelectAll = () => {
+    const allKeys = allSearchRowKeys();
+    setSearchSelected((prev) => (prev.size === allKeys.length ? new Set() : new Set(allKeys)));
+  };
+
+  const openCrossEnvPanel = (targets) => {
+    setCrossEnvTargets(targets);
+    setCrossEnvType("password");
+    setCrossEnvPassword("");
+    setCrossEnvAttrs({ superPriv: false, createDbPriv: false, createUserPriv: false, accountLocked: false });
+    setCrossEnvAccessType("readonly");
+    setCrossEnvDbOptions([]);
+    setCrossEnvDbGroups({});
+    setCrossEnvResults([]);
+  };
+
+  const closeCrossEnvPanel = () => setCrossEnvTargets(null);
+
+  const openBulkUpdate = () => {
+    const targets = [];
+    searchResults.forEach((r) =>
+      (r.matches || []).forEach((m) => {
+        if (searchSelected.has(rowKey(r.connectionName, m.Host))) {
+          targets.push({ connectionName: r.connectionName, host: m.Host });
+        }
+      })
+    );
+    if (targets.length) openCrossEnvPanel(targets);
+  };
+
+  // Fetches the union of databases across every target env's server, so the
+  // "Update access" panel can offer one checklist that applies to all of them.
+  const loadCrossEnvDatabases = async (targets) => {
+    setCrossEnvDbLoading(true);
+    try {
+      const uniqueConns = [...new Set(targets.map((t) => t.connectionName))];
+      const lists = await Promise.all(
+        uniqueConns.map((cn) => api.getDatabasesCrossEnv(cn).catch(() => []))
+      );
+      setCrossEnvDbOptions([...new Set(lists.flat())].sort());
+    } finally {
+      setCrossEnvDbLoading(false);
+    }
+  };
+
+  const selectCrossEnvType = (type) => {
+    setCrossEnvType(type);
+    if (type === "access" && crossEnvDbOptions.length === 0 && !crossEnvDbLoading) {
+      loadCrossEnvDatabases(crossEnvTargets);
+    }
+  };
+
+  // A freshly-selected database defaults to applying to every target env (matching
+  // the old uniform behavior); the user can then narrow it down per database via
+  // the "Applies to" chips — e.g. grant "titanDB" only to PROD while other
+  // databases still go to every environment selected above.
+  const crossEnvAllTargetKeys = () => crossEnvTargets.map((t) => rowKey(t.connectionName, t.host));
+
+  const toggleCrossEnvDb = (db) => {
+    setCrossEnvDbGroups((prev) => {
+      const next = { ...prev };
+      if (next[db]) delete next[db];
+      else next[db] = new Set(crossEnvAllTargetKeys());
+      return next;
+    });
+  };
+
+  const toggleCrossEnvSelectAllDbs = () => {
+    setCrossEnvDbGroups((prev) => {
+      if (Object.keys(prev).length === crossEnvDbOptions.length) return {};
+      const next = {};
+      for (const db of crossEnvDbOptions) next[db] = new Set(crossEnvAllTargetKeys());
+      return next;
+    });
+  };
+
+  const toggleCrossEnvEnvForDb = (db, key) => {
+    setCrossEnvDbGroups((prev) => {
+      const current = prev[db] || new Set(crossEnvAllTargetKeys());
+      const envs = new Set(current);
+      envs.has(key) ? envs.delete(key) : envs.add(key);
+      return { ...prev, [db]: envs };
+    });
+  };
+
+  const toggleCrossEnvEnvSelectAllForDb = (db) => {
+    setCrossEnvDbGroups((prev) => {
+      const current = prev[db] || new Set();
+      const allKeys = crossEnvAllTargetKeys();
+      const allSelected = current.size === allKeys.length;
+      return { ...prev, [db]: allSelected ? new Set() : new Set(allKeys) };
+    });
+  };
+
+  const crossEnvSelectedDbCount = Object.keys(crossEnvDbGroups).length;
+
+  const applyCrossEnvUpdate = async () => {
+    if (!crossEnvTargets || crossEnvTargets.length === 0) return;
+    if (crossEnvType === "password" && !crossEnvPassword) {
+      setCrossEnvResults([{ connectionName: "-", host: "-", success: false, message: "Password is required" }]);
+      return;
+    }
+    // Each selected database carries its own subset of target environments
+    // (a database can be scoped to fewer envs than the overall selection).
+    const accessGroups = Object.entries(crossEnvDbGroups)
+      .filter(([, envSet]) => envSet.size > 0)
+      .map(([database, envSet]) => ({
+        database,
+        targets: [...envSet].map((key) => {
+          const [connectionName, host] = key.split("|");
+          return { connectionName, host };
+        }),
+      }));
+    if (crossEnvType === "access" && accessGroups.length === 0) {
+      setCrossEnvResults([{ connectionName: "-", host: "-", success: false, message: "Select at least one database (and at least one environment it applies to)" }]);
+      return;
+    }
+    setCrossEnvApplying(true);
+    setCrossEnvResults([]);
+    try {
+      const data = await api.updateUserCrossEnv({
+        targets: crossEnvType === "access" ? undefined : crossEnvTargets,
+        username: searchUsername.trim(),
+        updateType: crossEnvType,
+        password: crossEnvType === "password" ? crossEnvPassword : undefined,
+        attributes: crossEnvType === "attributes" ? crossEnvAttrs : undefined,
+        access: crossEnvType === "access" ? { type: crossEnvAccessType, groups: accessGroups } : undefined,
+      });
+      setCrossEnvResults(data.results || []);
+      setSearchSelected(new Set());
+      await fetchSearchResults(searchUsername.trim());
+    } catch (err) {
+      setCrossEnvResults([{ connectionName: "-", host: "-", success: false, message: err.message }]);
+    }
+    setCrossEnvApplying(false);
+  };
+
+  // ════════════════════════════════════════
+  //  ADD USER ACROSS ENVIRONMENTS
+  // ════════════════════════════════════════
+
+  const handleShowCreateUserCrossEnv = (presetConnectionNames, presetUsername) => {
+    setView("create-user-cross-env");
+    setMsg("");
+    setCreateEnvSelected(new Set(presetConnectionNames || []));
+    setCreateEnvForm({
+      user: presetUsername || "", host: "%", password: "",
+      superPriv: false, createDbPriv: false, createUserPriv: false, accountLocked: false,
+    });
+    setCreateEnvResults([]);
+  };
+
+  const toggleCreateEnvSelected = (name) => {
+    setCreateEnvSelected((prev) => {
+      const next = new Set(prev);
+      next.has(name) ? next.delete(name) : next.add(name);
+      return next;
+    });
+  };
+
+  const toggleCreateEnvSelectAll = () => {
+    const allNames = Object.keys(connections);
+    setCreateEnvSelected((prev) => (prev.size === allNames.length ? new Set() : new Set(allNames)));
+  };
+
+  const handleCreateUserCrossEnv = async () => {
+    setCreateEnvResults([]);
+    if (createEnvSelected.size === 0) { setError("Select at least one target environment"); return; }
+    if (!createEnvForm.user.trim()) { setError("Username is required"); return; }
+    setMsg("");
+    setCreateEnvApplying(true);
+    try {
+      const data = await api.createUserCrossEnv({
+        connectionNames: [...createEnvSelected],
+        user: createEnvForm.user.trim(),
+        host: createEnvForm.host || "%",
+        password: createEnvForm.password,
+        superPriv: createEnvForm.superPriv,
+        createDbPriv: createEnvForm.createDbPriv,
+        createUserPriv: createEnvForm.createUserPriv,
+        accountLocked: createEnvForm.accountLocked,
+      });
+      setCreateEnvResults(data.results || []);
+    } catch (err) {
+      setError(err.message);
+    }
+    setCreateEnvApplying(false);
+  };
+
+  // ════════════════════════════════════════
   //  TABLE COLUMNS
   // ════════════════════════════════════════
 
@@ -423,6 +701,12 @@ export default function App() {
           ) : (
             <button className="btn btn-danger" onClick={handleDisconnect}>Disconnect</button>
           )}
+          <button className={`btn btn-secondary ${view === "search-user" ? "btn-primary" : ""}`} onClick={handleShowSearchUser}>
+            🔎 Search User in All Envs
+          </button>
+          <button className={`btn btn-secondary ${view === "create-user-cross-env" ? "btn-primary" : ""}`} onClick={() => handleShowCreateUserCrossEnv()}>
+            ➕ Add User in All Envs
+          </button>
         </div>
 
         {connError && <p className="error-msg" style={{ marginTop: 12 }}>{connError}</p>}
@@ -478,7 +762,7 @@ export default function App() {
       )}
 
       {/* ═══ Content Area ═══ */}
-      {connected && view && (
+      {(connected || view === "search-user" || view === "create-user-cross-env") && view && (
         <div className="content-area">
 
           {msg && (
@@ -770,6 +1054,342 @@ export default function App() {
 
                 <button className="btn btn-primary" onClick={handleCreateUser}>Create User</button>
               </div>
+            </>
+          )}
+
+          {/* ── Search User Across Environments ── */}
+          {view === "search-user" && (
+            <>
+              <h2>Search User Across Environments</h2>
+              <p className="hint" style={{ marginTop: -8, marginBottom: 16 }}>
+                Searches every connection saved in <code>.env</code>, independent of whichever connection is currently active.
+              </p>
+
+              <div className="form-row">
+                <input
+                  placeholder="Exact username..."
+                  value={searchUsername}
+                  onChange={(e) => setSearchUsername(e.target.value)}
+                  onKeyDown={(e) => { if (e.key === "Enter") runSearchUser(); }}
+                  style={{ minWidth: 280 }}
+                />
+                <button className="btn btn-primary" onClick={runSearchUser} disabled={searching}>
+                  {searching ? "Searching..." : "🔎 Search"}
+                </button>
+              </div>
+
+              {searchStatusMsg && (
+                <div className={searchStatusType === "error" ? "error-msg" : "msg"}>
+                  <div className="msg-body">{searchStatusMsg}</div>
+                </div>
+              )}
+
+              {searchResults.length > 0 && (
+                <>
+                  <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginTop: 8, marginBottom: 8 }}>
+                    <h3 style={{ margin: 0 }}>Results</h3>
+                    <button className="btn btn-primary btn-sm" onClick={openBulkUpdate} disabled={searchSelected.size === 0}>
+                      ✏️ Update Selected ({searchSelected.size})
+                    </button>
+                  </div>
+                  <table>
+                    <thead>
+                      <tr>
+                        <th style={{ width: 36 }}>
+                          <input
+                            type="checkbox"
+                            checked={allSearchRowKeys().length > 0 && searchSelected.size === allSearchRowKeys().length}
+                            onChange={toggleSearchSelectAll}
+                          />
+                        </th>
+                        <th>Environment</th>
+                        <th>Server</th>
+                        <th>Matched Host</th>
+                        <th>Super</th>
+                        <th>Create DB</th>
+                        <th>Locked</th>
+                        <th>Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {searchResults.map((r) => {
+                        if (r.error) {
+                          return (
+                            <tr key={r.connectionName}>
+                              <td></td>
+                              <td>{r.connectionName}</td>
+                              <td>{r.host}</td>
+                              <td colSpan={5} style={{ color: "#f85149" }}>⚠️ Could not connect: {r.error}</td>
+                            </tr>
+                          );
+                        }
+                        if (!r.matches || r.matches.length === 0) {
+                          return (
+                            <tr key={r.connectionName}>
+                              <td></td>
+                              <td>{r.connectionName}</td>
+                              <td>{r.host}</td>
+                              <td colSpan={4} className="empty">Not found</td>
+                              <td>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => handleShowCreateUserCrossEnv([r.connectionName], searchUsername.trim())}
+                                >
+                                  ➕ Add User
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        }
+                        return r.matches.map((m) => {
+                          const key = rowKey(r.connectionName, m.Host);
+                          return (
+                            <tr key={key}>
+                              <td>
+                                <input type="checkbox" checked={searchSelected.has(key)} onChange={() => toggleSearchRow(r.connectionName, m.Host)} />
+                              </td>
+                              <td>{r.connectionName}</td>
+                              <td>{r.host}</td>
+                              <td><code>{m.Host}</code></td>
+                              <td>{yesNo(m.Super_priv)}</td>
+                              <td>{yesNo(m.Create_priv)}</td>
+                              <td>{yesNo(m.account_locked)}</td>
+                              <td>
+                                <button
+                                  className="btn btn-primary btn-sm"
+                                  onClick={() => openCrossEnvPanel([{ connectionName: r.connectionName, host: m.Host }])}
+                                >
+                                  Update
+                                </button>
+                              </td>
+                            </tr>
+                          );
+                        });
+                      })}
+                    </tbody>
+                  </table>
+                </>
+              )}
+
+              {crossEnvTargets && (
+                <div className="cross-env-panel">
+                  <h3>Update "{searchUsername.trim()}"</h3>
+                  <p className="membership-hint">Target environment(s):</p>
+                  <div className="target-chip-row">
+                    {crossEnvTargets.map((t) => (
+                      <span key={rowKey(t.connectionName, t.host)} className="target-chip">
+                        {t.connectionName} <code>{t.host}</code>
+                      </span>
+                    ))}
+                  </div>
+
+                  <div className="toggle-row" style={{ marginTop: 12 }}>
+                    <label className="toggle-label">
+                      <input type="radio" name="crossEnvType" checked={crossEnvType === "password"} onChange={() => selectCrossEnvType("password")} />
+                      <span>Update password</span>
+                    </label>
+                    <label className="toggle-label">
+                      <input type="radio" name="crossEnvType" checked={crossEnvType === "attributes"} onChange={() => selectCrossEnvType("attributes")} />
+                      <span>Update attributes</span>
+                    </label>
+                    <label className="toggle-label">
+                      <input type="radio" name="crossEnvType" checked={crossEnvType === "access"} onChange={() => selectCrossEnvType("access")} />
+                      <span>Update access</span>
+                    </label>
+                  </div>
+
+                  {crossEnvType === "password" && (
+                    <div className="form-row">
+                      <input
+                        type="password"
+                        placeholder="New password"
+                        value={crossEnvPassword}
+                        onChange={(e) => setCrossEnvPassword(e.target.value)}
+                        style={{ minWidth: 280 }}
+                      />
+                    </div>
+                  )}
+
+                  {crossEnvType === "attributes" && (
+                    <div className="toggle-row">
+                      <Toggle checked={crossEnvAttrs.superPriv} onChange={(v) => setCrossEnvAttrs({ ...crossEnvAttrs, superPriv: v })} label="Super privilege?" />
+                      <Toggle checked={crossEnvAttrs.createDbPriv} onChange={(v) => setCrossEnvAttrs({ ...crossEnvAttrs, createDbPriv: v })} label="Create databases?" />
+                      <Toggle checked={crossEnvAttrs.createUserPriv} onChange={(v) => setCrossEnvAttrs({ ...crossEnvAttrs, createUserPriv: v })} label="Create users?" />
+                      <Toggle checked={crossEnvAttrs.accountLocked} onChange={(v) => setCrossEnvAttrs({ ...crossEnvAttrs, accountLocked: v })} label="Account locked?" />
+                    </div>
+                  )}
+
+                  {crossEnvType === "access" && (
+                    <div>
+                      <div className="toggle-row" style={{ marginBottom: 10 }}>
+                        <label className="toggle-label">
+                          <input type="radio" name="crossEnvAccessType" checked={crossEnvAccessType === "readonly"} onChange={() => setCrossEnvAccessType("readonly")} />
+                          <span>Read Only</span>
+                        </label>
+                        <label className="toggle-label">
+                          <input type="radio" name="crossEnvAccessType" checked={crossEnvAccessType === "readwrite"} onChange={() => setCrossEnvAccessType("readwrite")} />
+                          <span>Read & Write</span>
+                        </label>
+                        <label className="toggle-label">
+                          <input type="radio" name="crossEnvAccessType" checked={crossEnvAccessType === "revoke"} onChange={() => setCrossEnvAccessType("revoke")} />
+                          <span>Revoke</span>
+                        </label>
+                      </div>
+
+                      <p className="membership-hint" style={{ marginBottom: 4 }}>
+                        Each database defaults to applying to every target environment above — narrow the
+                        "Applies to" chips if a database should only go to some of them (e.g. grant <code>titanDB</code> only to PROD).
+                        {crossEnvSelectedDbCount > 0 && <strong style={{ color: "#98c379" }}> — {crossEnvSelectedDbCount} database(s) selected</strong>}
+                      </p>
+
+                      {crossEnvDbLoading ? (
+                        <p className="hint">Loading databases from target environment(s)...</p>
+                      ) : crossEnvDbOptions.length === 0 ? (
+                        <p className="empty">No databases found across the target environment(s).</p>
+                      ) : (
+                        <>
+                          <button type="button" className="btn btn-secondary btn-sm" style={{ marginBottom: 8 }}
+                            onClick={toggleCrossEnvSelectAllDbs}>
+                            {crossEnvSelectedDbCount === crossEnvDbOptions.length ? "Deselect All" : "Select All"}
+                          </button>
+                          <div className="db-tree">
+                            {crossEnvDbOptions.map((db) => {
+                              const group = crossEnvDbGroups[db];
+                              const selected = !!group;
+                              const allKeys = crossEnvAllTargetKeys();
+                              const scoped = selected && group.size < allKeys.length;
+                              return (
+                                <div key={db} className="db-tree-item">
+                                  <label className="db-tree-row">
+                                    <input type="checkbox" checked={selected} onChange={() => toggleCrossEnvDb(db)} />
+                                    <code>{db}</code>
+                                    {scoped && (
+                                      <span className="access-badge access-readonly" style={{ fontSize: 11 }}>
+                                        {group.size} of {allKeys.length} env(s)
+                                      </span>
+                                    )}
+                                  </label>
+                                  {selected && (
+                                    <div className="db-tree-body">
+                                      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
+                                        <span style={{ fontSize: 11, color: "#8b949e" }}>Applies to:</span>
+                                        <button type="button" className="btn btn-secondary btn-sm" onClick={() => toggleCrossEnvEnvSelectAllForDb(db)}>
+                                          {group.size === allKeys.length ? "Deselect All" : "Select All"}
+                                        </button>
+                                      </div>
+                                      <div className="target-chip-row">
+                                        {crossEnvTargets.map((t) => {
+                                          const key = rowKey(t.connectionName, t.host);
+                                          return (
+                                            <label key={key} className="toggle-label target-chip">
+                                              <input type="checkbox" checked={group.has(key)} onChange={() => toggleCrossEnvEnvForDb(db, key)} />
+                                              <span>{t.connectionName} <code>{t.host}</code></span>
+                                            </label>
+                                          );
+                                        })}
+                                      </div>
+                                      {group.size === 0 && (
+                                        <p style={{ color: "#e5c07b", fontSize: 11, margin: "6px 0 0" }}>
+                                          ⚠ No environments selected — <code>{db}</code> will be skipped entirely.
+                                        </p>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  )}
+
+                  <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+                    <button className="btn btn-primary" onClick={applyCrossEnvUpdate} disabled={crossEnvApplying}>
+                      {crossEnvApplying ? "Applying..." : `🚀 Apply to ${crossEnvTargets.length} Environment(s)`}
+                    </button>
+                    <button className="btn btn-secondary" onClick={closeCrossEnvPanel}>Cancel</button>
+                  </div>
+
+                  {crossEnvResults.length > 0 && (
+                    <div style={{ marginTop: 12 }}>
+                      {crossEnvResults.map((r, i) => (
+                        <div key={i} className={r.success ? "msg" : "error-msg"} style={{ marginBottom: 6 }}>
+                          <div className="msg-body">
+                            {r.success ? "✅" : "❌"} <strong>{r.connectionName}</strong> (<code>{r.host}</code>) — {r.message}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+            </>
+          )}
+
+          {/* ── Add User Across Environments ── */}
+          {view === "create-user-cross-env" && (
+            <>
+              <h2>Add User Across Environments</h2>
+              <p className="hint" style={{ marginTop: -8, marginBottom: 16 }}>
+                Creates the same user independently in each selected environment from <code>.env</code>.
+              </p>
+
+              <div style={{ marginBottom: 16 }}>
+                <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+                  <h3 style={{ margin: 0 }}>Target Environment(s)</h3>
+                  <button className="btn btn-secondary btn-sm" onClick={toggleCreateEnvSelectAll}>
+                    {createEnvSelected.size === Object.keys(connections).length ? "Deselect All" : "Select All"}
+                  </button>
+                </div>
+                <div className="target-chip-row">
+                  {Object.keys(connections).length === 0 && <span className="empty">No connections configured.</span>}
+                  {Object.keys(connections).map((name) => (
+                    <label key={name} className="toggle-label target-chip">
+                      <input type="checkbox" checked={createEnvSelected.has(name)} onChange={() => toggleCreateEnvSelected(name)} />
+                      <span>{name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div className="add-user-form">
+                <div className="form-row">
+                  <input placeholder="Username" value={createEnvForm.user}
+                    onChange={(e) => setCreateEnvForm({ ...createEnvForm, user: e.target.value })} />
+                  <input placeholder="Host (e.g. % or localhost)" value={createEnvForm.host}
+                    onChange={(e) => setCreateEnvForm({ ...createEnvForm, host: e.target.value })} />
+                  <input placeholder="Password" type="password" value={createEnvForm.password}
+                    onChange={(e) => setCreateEnvForm({ ...createEnvForm, password: e.target.value })} />
+                </div>
+                <div className="toggle-row" style={{ marginBottom: 12 }}>
+                  <Toggle
+                    checked={createEnvForm.superPriv}
+                    onChange={(v) => {
+                      if (v && !confirm(`Grant SUPER privilege to "${createEnvForm.user || "this user"}"?\n\nSUPER bypasses many MySQL permission checks.`)) return;
+                      setCreateEnvForm({ ...createEnvForm, superPriv: v });
+                    }}
+                    label="Super privilege?"
+                  />
+                  <Toggle checked={createEnvForm.createDbPriv}   onChange={(v) => setCreateEnvForm({ ...createEnvForm, createDbPriv: v })}   label="Create databases?" />
+                  <Toggle checked={createEnvForm.createUserPriv} onChange={(v) => setCreateEnvForm({ ...createEnvForm, createUserPriv: v })} label="Create users?" />
+                  <Toggle checked={createEnvForm.accountLocked}  onChange={(v) => setCreateEnvForm({ ...createEnvForm, accountLocked: v })}  label="Account locked?" />
+                </div>
+
+                <button className="btn btn-primary" onClick={handleCreateUserCrossEnv} disabled={createEnvApplying}>
+                  {createEnvApplying ? "Creating..." : `🚀 Create in ${createEnvSelected.size} Environment(s)`}
+                </button>
+              </div>
+
+              {createEnvResults.length > 0 && (
+                <div style={{ marginTop: 16 }}>
+                  {createEnvResults.map((r, i) => (
+                    <div key={i} className={r.success ? "msg" : "error-msg"} style={{ marginBottom: 6 }}>
+                      <div className="msg-body">{r.success ? "✅" : "❌"} <strong>{r.connectionName}</strong> — {r.message}</div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           )}
 

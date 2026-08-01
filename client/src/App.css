@@ -563,3 +563,70 @@ tbody tr:hover {
 .membership-add select {
   min-width: 220px;
 }
+
+/* ─── Cross-Environment Update Panel ─── */
+.cross-env-panel {
+  margin-top: 24px;
+  padding: 20px;
+  background: #0f1533;
+  border: 1px solid #2a3358;
+  border-radius: 8px;
+}
+
+.cross-env-panel h3 {
+  margin-bottom: 4px;
+  color: #f0f0f0;
+}
+
+.target-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 4px;
+}
+
+.target-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  background: #1c1f2b;
+  border: 1px solid #30363d;
+  border-radius: 14px;
+  font-size: 0.8rem;
+  color: #c9d1d9;
+}
+
+/* ─── Cross-Environment Database Tree (per-database env scoping) ─── */
+.db-tree {
+  max-height: 420px;
+  overflow-y: auto;
+  border: 1px solid #2a2d3a;
+  border-radius: 6px;
+  background: #1c1f2b;
+}
+
+.db-tree-item {
+  border-bottom: 1px solid #2a2d3a;
+}
+
+.db-tree-item:last-child {
+  border-bottom: none;
+}
+
+.db-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.db-tree-row:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.db-tree-body {
+  padding: 0 12px 12px 30px;
+}

@@ -42,4 +42,23 @@ async function disconnect() {
   }
 }
 
-module.exports = { connect, disconnect, getPool, getCurrentName, getCurrentConfig };
+// Opens a short-lived connection to a specific (possibly non-active) server config,
+// runs fn against it, and always closes it afterward. Used for cross-environment
+// search/update so we don't disturb whichever connection is currently active above.
+async function withScopedConnection(cfg, fn) {
+  const conn = await mysql.createConnection({
+    host: cfg.host,
+    port: parseInt(cfg.port, 10) || 3306,
+    user: cfg.user,
+    password: cfg.password,
+    database: "mysql",
+    connectTimeout: 6000,
+  });
+  try {
+    return await fn(conn);
+  } finally {
+    try { await conn.end(); } catch {}
+  }
+}
+
+module.exports = { connect, disconnect, getPool, getCurrentName, getCurrentConfig, withScopedConnection };

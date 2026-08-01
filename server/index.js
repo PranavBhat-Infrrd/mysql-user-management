@@ -3,7 +3,7 @@ require("dotenv").config({ path: path.resolve(__dirname, "../.env") });
 const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
-const { getPool, getCurrentName, getCurrentConfig, connect, disconnect } = require("./db");
+const { getPool, getCurrentName, getCurrentConfig, connect, disconnect, withScopedConnection } = require("./db");
 
 const app = express();
 app.use(cors());
@@ -21,11 +21,60 @@ function userIdent(user, host) {
   return `'${user.replace(/'/g, "\\'")}'@'${host.replace(/'/g, "\\'")}'`;
 }
 
+// Runs a query against any mysql2 promise connection/pool (the active pool,
+// or a short-lived scoped connection opened for a cross-environment request).
+async function runQuery(conn, sql, params = []) {
+  const [rows] = await conn.query(sql, params);
+  return rows;
+}
+
 async function query(sql, params = []) {
   const pool = getPool();
   if (!pool) throw new Error("Not connected to any database");
-  const [rows] = await pool.query(sql, params);
-  return rows;
+  return runQuery(pool, sql, params);
+}
+
+// Creates a user (+ optional privileges/lock/role memberships) on the given
+// connection. Shared by the single active-connection create route and the
+// cross-environment create route so both stay in sync.
+async function createUserOnConn(conn, { user, host, password, superPriv, createDbPriv, createUserPriv, accountLocked, memberOf }) {
+  if (!user) throw new Error("user is required");
+  const h = host || "%";
+  const ui = userIdent(user, h);
+
+  if (password) await runQuery(conn, `CREATE USER ${ui} IDENTIFIED BY ?`, [password]);
+  else await runQuery(conn, `CREATE USER ${ui}`);
+
+  if (superPriv)      await runQuery(conn, `GRANT SUPER ON *.* TO ${ui}`);
+  if (createDbPriv)   await runQuery(conn, `GRANT CREATE ON *.* TO ${ui}`);
+  if (createUserPriv) await runQuery(conn, `GRANT CREATE USER ON *.* TO ${ui}`);
+  if (accountLocked)  await runQuery(conn, `ALTER USER ${ui} ACCOUNT LOCK`);
+
+  if (memberOf && memberOf.length) {
+    for (const role of memberOf) {
+      const [roleUser, roleHost] = role.split("@");
+      await runQuery(conn, `GRANT ${userIdent(roleUser, roleHost || "%")} TO ${ui}`);
+    }
+  }
+
+  return { user, host: h };
+}
+
+// Applies (or revokes) database-level access for a user on the given connection.
+// type is "readonly", "readwrite", or "revoke". Shared by the single
+// active-connection grant/revoke routes and the cross-environment update route.
+async function applyAccessOnConn(conn, user, host, type, databases) {
+  const ui = userIdent(user, host);
+  for (const db of databases) {
+    const d = ident(db);
+    await runQuery(conn, `REVOKE ALL PRIVILEGES ON ${d}.* FROM ${ui}`).catch(() => {});
+    if (type === "readwrite") {
+      await runQuery(conn, `GRANT SELECT, INSERT, UPDATE, DELETE ON ${d}.* TO ${ui}`);
+    } else if (type === "readonly") {
+      await runQuery(conn, `GRANT SELECT ON ${d}.* TO ${ui}`);
+    }
+    // type === "revoke" — the REVOKE ALL above already covers it, nothing more to grant
+  }
 }
 
 // System accounts to exclude
@@ -214,30 +263,10 @@ app.get("/api/users/:user/:host", async (req, res) => {
 // Create user
 app.post("/api/users", async (req, res) => {
   try {
-    const { user, host, password, superPriv, createDbPriv, createUserPriv, accountLocked, memberOf } = req.body;
-    if (!user) return res.status(400).json({ error: "user is required" });
-    const h = host || "%";
-    const ui = userIdent(user, h);
-
-    if (password) {
-      await query(`CREATE USER ${ui} IDENTIFIED BY ?`, [password]);
-    } else {
-      await query(`CREATE USER ${ui}`);
-    }
-
-    if (superPriv)      await query(`GRANT SUPER ON *.* TO ${ui}`);
-    if (createDbPriv)   await query(`GRANT CREATE ON *.* TO ${ui}`);
-    if (createUserPriv) await query(`GRANT CREATE USER ON *.* TO ${ui}`);
-    if (accountLocked)  await query(`ALTER USER ${ui} ACCOUNT LOCK`);
-
-    if (memberOf && memberOf.length) {
-      for (const role of memberOf) {
-        const [roleUser, roleHost] = role.split("@");
-        await query(`GRANT ${userIdent(roleUser, roleHost || "%")} TO ${ui}`);
-      }
-    }
-
-    res.json({ success: true, message: `User "${user}"@"${h}" created` });
+    const pool = getPool();
+    if (!pool) throw new Error("Not connected to any database");
+    const { user, host } = await createUserOnConn(pool, req.body);
+    res.json({ success: true, message: `User "${user}"@"${host}" created` });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }
@@ -365,17 +394,10 @@ app.post("/api/users/:user/:host/grant", async (req, res) => {
     const { user, host } = req.params;
     const { type, databases } = req.body;
     if (!databases || !databases.length) return res.status(400).json({ error: "databases required" });
-    const ui = userIdent(user, host);
+    const pool = getPool();
+    if (!pool) throw new Error("Not connected to any database");
 
-    for (const db of databases) {
-      const d = ident(db);
-      await query(`REVOKE ALL PRIVILEGES ON ${d}.* FROM ${ui}`).catch(() => {});
-      if (type === "readwrite") {
-        await query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${d}.* TO ${ui}`);
-      } else {
-        await query(`GRANT SELECT ON ${d}.* TO ${ui}`);
-      }
-    }
+    await applyAccessOnConn(pool, user, host, type, databases);
 
     const label = type === "readwrite" ? "Read & Write" : "Read Only";
     res.json({ success: true, message: `Granted ${label} on: ${databases.join(", ")}` });
@@ -390,11 +412,10 @@ app.post("/api/users/:user/:host/revoke", async (req, res) => {
     const { user, host } = req.params;
     const { databases } = req.body;
     if (!databases || !databases.length) return res.status(400).json({ error: "databases required" });
-    const ui = userIdent(user, host);
+    const pool = getPool();
+    if (!pool) throw new Error("Not connected to any database");
 
-    for (const db of databases) {
-      await query(`REVOKE ALL PRIVILEGES ON ${ident(db)}.* FROM ${ui}`).catch(() => {});
-    }
+    await applyAccessOnConn(pool, user, host, "revoke", databases);
     res.json({ success: true, message: `Revoked access on: ${databases.join(", ")}` });
   } catch (err) {
     res.status(500).json({ error: err.message });
@@ -439,6 +460,206 @@ app.post("/api/export/:type", async (req, res) => {
     res.setHeader("Content-Type", "text/csv");
     res.setHeader("Content-Disposition", `attachment; filename=${type}_export.csv`);
     res.send(csvLines.join("\n"));
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ════════════════════════════════════════════════════════════════
+//  CROSS-ENVIRONMENT USER SEARCH & UPDATE
+//  These endpoints open short-lived connections scoped to a specific named
+//  connection from .env, independent of the pool/connection above. This lets
+//  us search/update a user in ANY configured environment without disturbing
+//  whichever connection the rest of the app currently has active.
+// ════════════════════════════════════════════════════════════════
+
+// Search for an exact username across ALL configured connections (.env)
+app.get("/api/search-user", async (req, res) => {
+  try {
+    const username = (req.query.username || "").trim();
+    if (!username) return res.status(400).json({ error: "username query param is required" });
+
+    const conns = parseConnections();
+    const connectionName = (req.query.connectionName || "").trim();
+    const names = connectionName ? [connectionName] : Object.keys(conns);
+    if (connectionName && !conns[connectionName]) {
+      return res.status(404).json({ error: `Connection "${connectionName}" not found` });
+    }
+
+    const results = await Promise.all(names.map(async (name) => {
+      const cfg = conns[name];
+      try {
+        const rows = await withScopedConnection(cfg, async (conn) => {
+          const [rows] = await conn.query(
+            `SELECT User, Host, Super_priv, Create_priv, Create_user_priv,
+                    account_locked, password_expired
+             FROM mysql.user WHERE User = ?`,
+            [username]
+          );
+          return rows;
+        });
+        return { connectionName: name, host: cfg.host, matches: rows, error: null };
+      } catch (err) {
+        return { connectionName: name, host: cfg.host, matches: [], error: err.message || String(err) };
+      }
+    }));
+
+    res.json({ username, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// List databases for one specific named connection (cross-env db picker, used by
+// the "Update access" cross-env panel and the create-user-cross-env db picker)
+app.get("/api/databases-cross-env", async (req, res) => {
+  try {
+    const connectionName = (req.query.connectionName || "").trim();
+    if (!connectionName) return res.status(400).json({ error: "connectionName query param is required" });
+
+    const conns = parseConnections();
+    const cfg = conns[connectionName];
+    if (!cfg) return res.status(404).json({ error: `Connection "${connectionName}" not found` });
+
+    const names = await withScopedConnection(cfg, async (conn) => {
+      const rows = await runQuery(
+        conn,
+        `SELECT SCHEMA_NAME FROM information_schema.SCHEMATA
+         WHERE SCHEMA_NAME NOT IN ('mysql','information_schema','performance_schema','sys')
+         ORDER BY SCHEMA_NAME`
+      );
+      return rows.map((r) => r.SCHEMA_NAME);
+    });
+
+    res.json(names);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Update a user's password/attributes/database-access in one or more specific named
+// connections, independent of whichever connection is currently active in the app.
+// Each target is updated via its own connection, so one failure doesn't block the others.
+app.post("/api/update-user-cross-env", async (req, res) => {
+  try {
+    const { targets, username, updateType, password, attributes, access } = req.body;
+
+    if (!username) return res.status(400).json({ error: "Username is required" });
+    if (!["password", "attributes", "access"].includes(updateType))
+      return res.status(400).json({ error: "Invalid updateType" });
+    if (updateType === "password" && !password)
+      return res.status(400).json({ error: "Password is required" });
+
+    const conns = parseConnections();
+
+    // Access mode: each selected database carries its own list of target
+    // environments (a database can be scoped to a subset of the overall
+    // selection, e.g. grant "titanDB" only to PROD while other databases
+    // still go to every environment). Group by target first so a single
+    // connectionName+host pair that appears in multiple databases only opens
+    // one scoped connection instead of one per database.
+    if (updateType === "access") {
+      if (!access || !["readonly", "readwrite", "revoke"].includes(access.type))
+        return res.status(400).json({ error: "Invalid access type" });
+      if (!Array.isArray(access.groups) || access.groups.length === 0)
+        return res.status(400).json({ error: "At least one database selection is required" });
+      for (const g of access.groups) {
+        if (!g.database || !Array.isArray(g.targets) || g.targets.length === 0)
+          return res.status(400).json({ error: "Each selection must have a database and at least one target environment" });
+      }
+
+      const byTarget = {}; // key `${connectionName}|${host}` -> { connectionName, host, databases: Set }
+      for (const g of access.groups) {
+        for (const t of g.targets) {
+          const key = `${t.connectionName}|${t.host}`;
+          if (!byTarget[key]) byTarget[key] = { connectionName: t.connectionName, host: t.host, databases: new Set() };
+          byTarget[key].databases.add(g.database);
+        }
+      }
+
+      const results = await Promise.all(Object.values(byTarget).map(async (t) => {
+        const cfg = conns[t.connectionName];
+        if (!cfg) return { connectionName: t.connectionName, host: t.host, success: false, message: `Connection "${t.connectionName}" not found` };
+        try {
+          await withScopedConnection(cfg, (conn) => applyAccessOnConn(conn, username, t.host, access.type, [...t.databases]));
+          return { connectionName: t.connectionName, host: t.host, success: true, message: `Updated access on: ${[...t.databases].join(", ")}` };
+        } catch (err) {
+          return { connectionName: t.connectionName, host: t.host, success: false, message: err.message || String(err) };
+        }
+      }));
+
+      return res.json({ success: true, results });
+    }
+
+    // Password/attributes mode: applies uniformly to every selected target environment.
+    if (!Array.isArray(targets) || targets.length === 0)
+      return res.status(400).json({ error: "At least one target environment is required" });
+
+    const results = await Promise.all(targets.map(async (target) => {
+      const cfg = conns[target.connectionName];
+      const host = target.host;
+      if (!cfg) {
+        return { connectionName: target.connectionName, host, success: false, message: `Connection "${target.connectionName}" not found` };
+      }
+      const ui = userIdent(username, host);
+      try {
+        await withScopedConnection(cfg, async (conn) => {
+          if (updateType === "password") {
+            await runQuery(conn, `ALTER USER ${ui} IDENTIFIED BY ?`, [password]);
+          } else {
+            const { superPriv, createDbPriv, createUserPriv, accountLocked } = attributes || {};
+            if (superPriv) await runQuery(conn, `GRANT SUPER ON *.* TO ${ui}`);
+            else await runQuery(conn, `REVOKE SUPER ON *.* FROM ${ui}`).catch(() => {});
+
+            if (createDbPriv) await runQuery(conn, `GRANT CREATE ON *.* TO ${ui}`);
+            else await runQuery(conn, `REVOKE CREATE ON *.* FROM ${ui}`).catch(() => {});
+
+            if (createUserPriv) await runQuery(conn, `GRANT CREATE USER ON *.* TO ${ui}`);
+            else await runQuery(conn, `REVOKE CREATE USER ON *.* FROM ${ui}`).catch(() => {});
+
+            if (accountLocked) await runQuery(conn, `ALTER USER ${ui} ACCOUNT LOCK`);
+            else await runQuery(conn, `ALTER USER ${ui} ACCOUNT UNLOCK`);
+          }
+        });
+        return { connectionName: target.connectionName, host, success: true, message: "Updated successfully" };
+      } catch (err) {
+        return { connectionName: target.connectionName, host, success: false, message: err.message || String(err) };
+      }
+    }));
+
+    res.json({ success: true, results });
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Create a new user in one or more specific named connections, independent of
+// whichever connection is currently active in the app. Each target is created
+// independently via its own connection, so one failure doesn't block the others.
+app.post("/api/create-user-cross-env", async (req, res) => {
+  try {
+    const { connectionNames, user, host, password, superPriv, createDbPriv, createUserPriv, accountLocked, memberOf } = req.body;
+
+    if (!Array.isArray(connectionNames) || connectionNames.length === 0)
+      return res.status(400).json({ error: "At least one target environment is required" });
+    if (!user) return res.status(400).json({ error: "user is required" });
+
+    const conns = parseConnections();
+
+    const results = await Promise.all(connectionNames.map(async (name) => {
+      const cfg = conns[name];
+      if (!cfg) return { connectionName: name, success: false, message: `Connection "${name}" not found` };
+      try {
+        const created = await withScopedConnection(cfg, (conn) =>
+          createUserOnConn(conn, { user, host, password, superPriv, createDbPriv, createUserPriv, accountLocked, memberOf })
+        );
+        return { connectionName: name, success: true, message: `User "${created.user}"@"${created.host}" created` };
+      } catch (err) {
+        return { connectionName: name, success: false, message: err.message || String(err) };
+      }
+    }));
+
+    res.json({ success: true, results });
   } catch (err) {
     res.status(500).json({ error: err.message });
   }

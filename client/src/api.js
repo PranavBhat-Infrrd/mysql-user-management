@@ -48,3 +48,13 @@ export const revokeAccess = (user, host, databases) =>
 // Export
 export const exportData = (type, names) =>
   request(`/export/${type}`, { method: "POST", body: JSON.stringify({ names }) });
+
+// Cross-environment search & update
+export const searchUserAcrossEnvs = (username) =>
+  request(`/search-user?username=${encodeURIComponent(username)}`);
+export const updateUserCrossEnv = (data) =>
+  request("/update-user-cross-env", { method: "POST", body: JSON.stringify(data) });
+export const getDatabasesCrossEnv = (connectionName) =>
+  request(`/databases-cross-env?connectionName=${encodeURIComponent(connectionName)}`);
+export const createUserCrossEnv = (data) =>
+  request("/create-user-cross-env", { method: "POST", body: JSON.stringify(data) });
