@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 # Build, push, and (re)deploy mysql-user-mgmt to the dev01 EKS cluster.
-#
-# Prerequisite (parked, not yet done): the ECR repo and IAM role
-# (polaris-mysql-user-mgmt) referenced below need to exist first --
-# see chart/values.yaml's serviceAccount.annotations and Step 3 of the plan.
 set -euo pipefail
 
 APP=mysql-user-mgmt
