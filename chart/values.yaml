@@ -11,8 +11,10 @@ fullnameOverride: ""
 serviceAccount:
   create: true
   name: mysql-user-mgmt
-  annotations:
-    eks.amazonaws.com/role-arn: arn:aws:iam::465825429380:role/polaris-mysql-user-mgmt
+  # No IRSA role -- this app makes no direct AWS API calls (pure TCP DB
+  # client). Secrets are synced by the cluster's shared external-secrets
+  # controller (its own role, not this app's), so no annotation needed here.
+  annotations: {}
 
 service:
   type: ClusterIP
@@ -42,125 +44,125 @@ resources:
 externalSecrets:
   enabled: true
   secrets:
-    - key: /devops/shared/mysql/DEV/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/DEV/HOST
       name: CONN_DEV_HOST
-    - key: /devops/shared/mysql/DEV/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/DEV/PORT
       name: CONN_DEV_PORT
-    - key: /devops/shared/mysql/DEV/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/DEV/USER
       name: CONN_DEV_USER
-    - key: /devops/shared/mysql/DEV/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/DEV/PASSWORD
       name: CONN_DEV_PASSWORD
-    - key: /devops/shared/mysql/STAGING/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/STAGING/HOST
       name: CONN_STAGING_HOST
-    - key: /devops/shared/mysql/STAGING/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/STAGING/PORT
       name: CONN_STAGING_PORT
-    - key: /devops/shared/mysql/STAGING/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/STAGING/USER
       name: CONN_STAGING_USER
-    - key: /devops/shared/mysql/STAGING/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/STAGING/PASSWORD
       name: CONN_STAGING_PASSWORD
-    - key: /devops/shared/mysql/UAT/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/UAT/HOST
       name: CONN_UAT_HOST
-    - key: /devops/shared/mysql/UAT/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/UAT/PORT
       name: CONN_UAT_PORT
-    - key: /devops/shared/mysql/UAT/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/UAT/USER
       name: CONN_UAT_USER
-    - key: /devops/shared/mysql/UAT/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/UAT/PASSWORD
       name: CONN_UAT_PASSWORD
-    - key: /devops/shared/mysql/APUAT/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/APUAT/HOST
       name: CONN_APUAT_HOST
-    - key: /devops/shared/mysql/APUAT/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/APUAT/PORT
       name: CONN_APUAT_PORT
-    - key: /devops/shared/mysql/APUAT/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/APUAT/USER
       name: CONN_APUAT_USER
-    - key: /devops/shared/mysql/APUAT/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/APUAT/PASSWORD
       name: CONN_APUAT_PASSWORD
-    - key: /devops/shared/mysql/SWBCUAT/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBCUAT/HOST
       name: CONN_SWBCUAT_HOST
-    - key: /devops/shared/mysql/SWBCUAT/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBCUAT/PORT
       name: CONN_SWBCUAT_PORT
-    - key: /devops/shared/mysql/SWBCUAT/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBCUAT/USER
       name: CONN_SWBCUAT_USER
-    - key: /devops/shared/mysql/SWBCUAT/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBCUAT/PASSWORD
       name: CONN_SWBCUAT_PASSWORD
-    - key: /devops/shared/mysql/ARK/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/ARK/HOST
       name: CONN_ARK_HOST
-    - key: /devops/shared/mysql/ARK/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/ARK/PORT
       name: CONN_ARK_PORT
-    - key: /devops/shared/mysql/ARK/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/ARK/USER
       name: CONN_ARK_USER
-    - key: /devops/shared/mysql/ARK/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/ARK/PASSWORD
       name: CONN_ARK_PASSWORD
-    - key: /devops/shared/mysql/SWBC/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBC/HOST
       name: CONN_SWBC_HOST
-    - key: /devops/shared/mysql/SWBC/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBC/PORT
       name: CONN_SWBC_PORT
-    - key: /devops/shared/mysql/SWBC/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBC/USER
       name: CONN_SWBC_USER
-    - key: /devops/shared/mysql/SWBC/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SWBC/PASSWORD
       name: CONN_SWBC_PASSWORD
-    - key: /devops/shared/mysql/BRK/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/BRK/HOST
       name: CONN_BRK_HOST
-    - key: /devops/shared/mysql/BRK/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/BRK/PORT
       name: CONN_BRK_PORT
-    - key: /devops/shared/mysql/BRK/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/BRK/USER
       name: CONN_BRK_USER
-    - key: /devops/shared/mysql/BRK/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/BRK/PASSWORD
       name: CONN_BRK_PASSWORD
-    - key: /devops/shared/mysql/RKT/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKT/HOST
       name: CONN_RKT_HOST
-    - key: /devops/shared/mysql/RKT/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKT/PORT
       name: CONN_RKT_PORT
-    - key: /devops/shared/mysql/RKT/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKT/USER
       name: CONN_RKT_USER
-    - key: /devops/shared/mysql/RKT/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKT/PASSWORD
       name: CONN_RKT_PASSWORD
-    - key: /devops/shared/mysql/RKTPROD02/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKTPROD02/HOST
       name: CONN_RKTPROD02_HOST
-    - key: /devops/shared/mysql/RKTPROD02/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKTPROD02/PORT
       name: CONN_RKTPROD02_PORT
-    - key: /devops/shared/mysql/RKTPROD02/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKTPROD02/USER
       name: CONN_RKTPROD02_USER
-    - key: /devops/shared/mysql/RKTPROD02/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/RKTPROD02/PASSWORD
       name: CONN_RKTPROD02_PASSWORD
-    - key: /devops/shared/mysql/EU/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/EU/HOST
       name: CONN_EU_HOST
-    - key: /devops/shared/mysql/EU/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/EU/PORT
       name: CONN_EU_PORT
-    - key: /devops/shared/mysql/EU/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/EU/USER
       name: CONN_EU_USER
-    - key: /devops/shared/mysql/EU/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/EU/PASSWORD
       name: CONN_EU_PASSWORD
-    - key: /devops/shared/mysql/US/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/US/HOST
       name: CONN_US_HOST
-    - key: /devops/shared/mysql/US/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/US/PORT
       name: CONN_US_PORT
-    - key: /devops/shared/mysql/US/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/US/USER
       name: CONN_US_USER
-    - key: /devops/shared/mysql/US/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/US/PASSWORD
       name: CONN_US_PASSWORD
-    - key: /devops/shared/mysql/SN/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SN/HOST
       name: CONN_SN_HOST
-    - key: /devops/shared/mysql/SN/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SN/PORT
       name: CONN_SN_PORT
-    - key: /devops/shared/mysql/SN/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SN/USER
       name: CONN_SN_USER
-    - key: /devops/shared/mysql/SN/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/SN/PASSWORD
       name: CONN_SN_PASSWORD
-    - key: /devops/shared/mysql/AU/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/AU/HOST
       name: CONN_AU_HOST
-    - key: /devops/shared/mysql/AU/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/AU/PORT
       name: CONN_AU_PORT
-    - key: /devops/shared/mysql/AU/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/AU/USER
       name: CONN_AU_USER
-    - key: /devops/shared/mysql/AU/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/AU/PASSWORD
       name: CONN_AU_PASSWORD
-    - key: /devops/shared/mysql/CA/HOST
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/CA/HOST
       name: CONN_CA_HOST
-    - key: /devops/shared/mysql/CA/PORT
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/CA/PORT
       name: CONN_CA_PORT
-    - key: /devops/shared/mysql/CA/USER
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/CA/USER
       name: CONN_CA_USER
-    - key: /devops/shared/mysql/CA/PASSWORD
+    - key: /runtime/dev01-us-west-2/devops/shared/mysql/CA/PASSWORD
       name: CONN_CA_PASSWORD
 
 env: {}
