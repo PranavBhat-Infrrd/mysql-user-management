@@ -1,8 +1,8 @@
 replicaCount: 1
 
 image:
-  repository: 592754518446.dkr.ecr.us-west-2.amazonaws.com/mysql-user-mgmt
-  tag: latest
+  repository: PLACEHOLDER_ECR_REPO/mysql-user-mgmt
+  tag: PLACEHOLDER_TAG
   pullPolicy: Always
 
 nameOverride: ""
