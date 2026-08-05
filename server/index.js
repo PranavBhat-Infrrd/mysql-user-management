@@ -80,27 +80,11 @@ async function applyAccessOnConn(conn, user, host, type, databases) {
 // System accounts to exclude
 const SYSTEM_USERS = ["mysql.sys", "mysql.infoschema", "mysql.session", ""];
 
-// Reads CONN_<NAME>_<FIELD> connections from the .env file (local dev, where
-// "+ Add Connection" appends to that same file) and merges in any of the same
-// pattern already present in process.env (Kubernetes, where secrets arrive as
-// injected env vars -- there's no .env file to read there at all). File-based
-// entries win on conflict since only local dev ever has both sources at once.
 function parseConnections() {
-  const conns = {};
-
-  for (const [key, val] of Object.entries(process.env)) {
-    const match = key.match(/^CONN_(.+?)_(HOST|PORT|USER|PASSWORD)$/);
-    if (match) {
-      const name = match[1];
-      const field = match[2].toLowerCase();
-      if (!conns[name]) conns[name] = {};
-      conns[name][field] = val;
-    }
-  }
-
   let raw = "";
-  try { raw = fs.readFileSync(ENV_PATH, "utf-8"); } catch { return conns; }
+  try { raw = fs.readFileSync(ENV_PATH, "utf-8"); } catch { return {}; }
   const lines = raw.split("\n");
+  const conns = {};
   for (const line of lines) {
     const trimmed = line.trim();
     if (trimmed.startsWith("#") || !trimmed.includes("=")) continue;
